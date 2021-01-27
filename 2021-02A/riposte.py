@@ -277,6 +277,49 @@ class syalis_bot(base_bot):
         do_attack = bool(stk)
         return movement, do_attack
 
+class improved_random_bot(base_bot):
+    """
+    improved random bot
+    """
+    count = None
+    def reset(self, no):
+        import random
+        opponent_last = (0,0)
+        self.count = None
+        self._random = random.Random()
+    def get_bot_name(self):
+        return "improved random bot"
+    def get_player_name(self):
+        return "tj"
+    def get_action(self, sloc, oloc, cd):
+        if self.count == None:
+            self.count = False
+            return (1, 0), False
+        elif self.count == False:
+            self.count = True
+            return (0, 1), False
+        else:
+            import random
+            moves = []
+            if sloc[0] > 0:
+                moves.append((-1, 0))
+            if sloc[0] < 4:
+                moves.append((1, 0))
+            if sloc[1] > 0:
+                moves.append((0, -1))
+            if sloc[1] < 4:
+                moves.append((0, 1))
+            if cd > 0:
+                moves.append((0, 0))
+                return max(moves, key = lambda k: abs(sloc[0] + k[0] - oloc[0]) + abs(sloc[1] + k[1] - oloc[1])), False 
+            if ((abs(sloc[0] - oloc[0]) + abs(sloc[1] - oloc[1])) == 2):
+                return (0,0), False
+            if (abs(sloc[0] - oloc[0]) + abs(sloc[1] - oloc[1]) <= 1):
+                return (0,0), True
+            if ((abs(sloc[0] - oloc[0]) + abs(sloc[1] - oloc[1])) != 4):
+                return min(moves, key = lambda k: abs(sloc[0] + k[0] - oloc[0]) + abs(sloc[1] + k[1] - oloc[1])), False
+            return (0,0), False
+
 def make_all_bots() -> typing.List[base_bot]:
     return [
         random_bot(),
@@ -284,6 +327,7 @@ def make_all_bots() -> typing.List[base_bot]:
         afk_bot(),
         cautious_bot(),
         syalis_bot(),
+        improved_random_bot(),
         ]
 
 def run_match(abot: base_bot, bbot: base_bot) -> typing.Tuple[int, int]:
