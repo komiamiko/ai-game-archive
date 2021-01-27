@@ -14,3 +14,4 @@ Past tournaments are published here for the public to learn from.
 * No malicious code. I check every submission by hand.
 * Bots should not peek at information they're not supposed to have, like hidden game state or other bots' code.
 * Bots should not designed specifically to counter another bot.
+* If your bot errors or returns an invalid value, it automatically loses the round.
