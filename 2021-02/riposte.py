@@ -39,6 +39,8 @@ class base_bot(abc.ABC):
         opponent_location: typing.Tuple[int, int],
         attack_cooldown: int) -> typing.Tuple[typing.Tuple[int, int], bool]:
         pass
+    def __str__(self):
+        return self.get_bot_name()
 
 class random_bot(base_bot):
     """
@@ -126,6 +128,8 @@ def make_all_bots() -> typing.List[base_bot]:
 
 def run_match(abot: base_bot, bbot: base_bot) -> typing.Tuple[int, int]:
     import itertools
+    import traceback
+    import warnings
     MAX_ROUNDS = 200
     BOARD_MAX = 4
     VALID_MOVES = set(itertools.product([(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)],[False, True]))
@@ -141,11 +145,19 @@ def run_match(abot: base_bot, bbot: base_bot) -> typing.Tuple[int, int]:
     for _ in range(MAX_ROUNDS):
         acd = max(0, acd - 1)
         bcd = max(0, bcd - 1)
-        aaction = abot.get_action(apos, bpos, acd)
-        baction = bbot.get_action(
-            (BOARD_MAX-bpos[0],BOARD_MAX-bpos[1]),
-            (BOARD_MAX-apos[0],BOARD_MAX-apos[1]),
-            bcd)
+        try:
+            aaction = abot.get_action(apos, bpos, acd)
+        except Exception as exc:
+            aaction = exc
+            traceback.print_exc()
+        try:
+            baction = bbot.get_action(
+                (BOARD_MAX-bpos[0],BOARD_MAX-bpos[1]),
+                (BOARD_MAX-apos[0],BOARD_MAX-apos[1]),
+                bcd)
+        except Exception as exc:
+            baction = exc
+            traceback.print_exc()
         if aaction not in VALID_MOVES:
             afail = True
         else:
@@ -171,32 +183,44 @@ def run_match(abot: base_bot, bbot: base_bot) -> typing.Tuple[int, int]:
                 bfail = True
             bmoved = bool(bdx or bdy)
         if afail or bfail:
+            if afail:
+                warnings.warn(f'{abot} returned invalid move: {aaction}')
+            if bfail:
+                warnings.warn(f'{bbot} returned invalid move: {baction}')
             return (1 - afail, 1 - bfail)
-        if atk and not (btk and not bmoved):
+        if apos == bpos and atk and not (btk and not bmoved):
             bfail = True
-        if btk and not (atk and not amoved):
+        if apos == bpos and btk and not (atk and not amoved):
             afail = True
         if afail or bfail:
             return (1 - afail, 1 - bfail)
     return (0, 0)
 
-def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[int, str, str]]:
+def run_tournament(all_bots: typing.List[base_bot], verbose: bool = True) -> typing.List[typing.Tuple[int, str, str]]:
     import itertools
-    ITERATIONS_SCALE = 1000 # subject to change
+    OUTER_ITERATIONS = 10
+    ITERATIONS_SCALE = 200 # subject to change
     bot_scores = {}
-    for abot, bbot in itertools.combinations(all_bots, 2):
-        aname = abot.get_bot_name()
-        bname = bbot.get_bot_name()
-        ascore = bot_scores.get(aname, 0)
-        bscore = bot_scores.get(bname, 0)
-        abot.reset(True)
-        bbot.reset(True)
-        for _ in range(ITERATIONS_SCALE):
-            da, db = run_match(abot, bbot)
-            ascore += da
-            bscore += db
-        bot_scores[aname] = ascore
-        bot_scores[bname] = bscore
+    for ii in range(OUTER_ITERATIONS):
+        if verbose:
+            print(f'big iteration {ii+1} / {OUTER_ITERATIONS}')
+        for abot, bbot in itertools.combinations(all_bots, 2):
+            aname = abot.get_bot_name()
+            bname = bbot.get_bot_name()
+            ascore = bot_scores.get(aname, 0)
+            bscore = bot_scores.get(bname, 0)
+            dascore = 0
+            dbscore = 0
+            abot.reset(True)
+            bbot.reset(True)
+            for _ in range(ITERATIONS_SCALE):
+                da, db = run_match(abot, bbot)
+                dascore += da
+                dbscore += db
+            if verbose and ii == 0:
+                print(f'{aname} vs {bname} - {dascore}:{dbscore}')
+            bot_scores[aname] = ascore + dascore
+            bot_scores[bname] = bscore + dbscore
     score_table = list((bot_scores[ibot.get_bot_name()], ibot.get_bot_name(), ibot.get_player_name()) for ibot in all_bots)
     score_table.sort(reverse=True)
     return score_table
