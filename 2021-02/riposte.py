@@ -119,11 +119,171 @@ class afk_bot(base_bot):
             self.counter_first = False
         return movement, do_attack
 
+class cautious_bot(base_bot):
+    """
+    Attack dives from 2 tiles away, then retreats.
+    Tries to win or force a draw.
+    """
+    def reset(self, no):
+        import random
+        self._random = random.Random()
+    def get_bot_name(self):
+        return 'cautious_bot'
+    def get_player_name(self):
+        return 'komiamiko'
+    def get_action(self, sloc, oloc, cd):
+        random = self._random
+        movement_toward = set()
+        movement_any = set()
+        if sloc[0] > 0:
+            movement_any.add((-1, 0))
+        if sloc[0] < 4:
+            movement_any.add((1, 0))
+        if sloc[1] > 0:
+            movement_any.add((0, -1))
+        if sloc[1] < 4:
+            movement_any.add((0, 1))
+        if sloc[0] < oloc[0]:
+            movement_toward.add((1, 0))
+        elif sloc[0] > oloc[0]:
+            movement_toward.add((-1, 0))
+        if sloc[1] < oloc[1]:
+            movement_toward.add((0, 1))
+        elif sloc[1] > oloc[1]:
+            movement_toward.add((0, -1))
+        movement_away = movement_any - movement_toward
+        dist = abs(sloc[0] - oloc[0]) + abs(sloc[1] - oloc[1])
+        if dist == 2 and cd == 0 and random.randint(1, 2) == 1 or not movement_away:
+            movement = random.choice(list(movement_toward))
+            do_attack = cd == 0
+            return movement, do_attack
+        if cd != 0 or dist <= 2:
+            do_attack = cd == 0 and random.randint(1, 2) == 1
+            movement = (0, 0) if do_attack else random.choice(list(movement_away))
+            return movement, do_attack
+        movement_toward.add((0, 0))
+        movement = random.choice(list(movement_toward))
+        do_attack = False
+        return movement, do_attack
+
+class syalis_bot(base_bot):
+    """
+    Keep track of how often the opponent takes certain actions, to predict them.
+    Be pessimistic - assume the opponent is intelligent,
+      and assume we lost the round unless we definitely won.
+    """
+    def reset(self, no):
+        import random
+        self._random = random.Random()
+        if no:
+            self._attack_counts = [[[2,1] for _ in range(3)] for _ in range(4)] # threat turns, pre dist, did attack
+            self._move_counts = [[[1]*3 for _ in range(9)] for _ in range(3)] # cooldown, pre dist, move toward
+        else:
+            if self._last_seen is not None:
+                predist, lsloc, stw, stk = self._last_seen
+                threat_key = min(3, self._threat_turns)
+                if predist == 2:
+                    self._attack_counts[threat_key][2][1] += 1
+                elif predist == 1:
+                    self._attack_counts[threat_key][1][1] += 1
+                else:
+                    self._attack_counts[threat_key][0][stw < 0 or not stk] += 1
+        self._cdxs = [1, 0, 0]
+        self._last_seen = None
+        self._threat_turns = 0
+    def get_bot_name(self):
+        return 'Syalis Hypothesis'
+    def get_player_name(self):
+        return 'komiamiko'
+    def get_action(self, sloc, oloc, cd):
+        import itertools
+        random = self._random
+        USE_GREEDY = True
+        def calc_dist(aloc, bloc):
+            return abs(aloc[0]-bloc[0])+abs(aloc[1]-bloc[1])
+        if self._last_seen is not None:
+            # update observation
+            predist, lsloc, stw, stk = self._last_seen
+            omdist = calc_dist(lsloc, oloc)
+            otw = predist - omdist
+            threat_key = min(3, self._threat_turns)
+            for i in range(3):
+                self._move_counts[i][predist][otw+1] += self._cdxs[i]
+            if sloc == oloc:
+                self._attack_counts[threat_key][predist][0] += 1
+            potk = omdist <= 1 and self._attack_counts[threat_key][predist][1] / sum(self._attack_counts[threat_key][predist])
+            self._cdxs = [
+                self._cdxs[0] * (1 - potk) + self._cdxs[1],
+                self._cdxs[2],
+                self._cdxs[0] * potk
+                ]
+        dist = calc_dist(sloc, oloc)
+        if dist <= 1:
+            self._threat_turns += 1
+        else:
+            self._threat_turns = 0
+        threat_key = min(3, self._threat_turns)
+        movement_toward = set()
+        movement_any = set()
+        if sloc[0] > 0:
+            movement_any.add((-1, 0))
+        if sloc[0] < 4:
+            movement_any.add((1, 0))
+        if sloc[1] > 0:
+            movement_any.add((0, -1))
+        if sloc[1] < 4:
+            movement_any.add((0, 1))
+        if sloc[0] < oloc[0]:
+            movement_toward.add((1, 0))
+        elif sloc[0] > oloc[0]:
+            movement_toward.add((-1, 0))
+        if sloc[1] < oloc[1]:
+            movement_toward.add((0, 1))
+        elif sloc[1] > oloc[1]:
+            movement_toward.add((0, -1))
+        movement_away = movement_any - movement_toward
+        movement_sets = [movement_away, [(0, 0)], movement_toward]
+        saction_rewards = [[None]*2 for _ in range(3)]
+        for stw in range(-1, 2):
+            movement_set = movement_sets[stw+1]
+            for stk in [False, True]:
+                if not movement_set or stk and cd != 0:
+                    saction_rewards[stw+1][stk] = -1e10
+                    continue
+                ivalue = 0
+                for otw in range(-1, 2):
+                    rdist = dist - stw - otw
+                    prdist = dist - otw
+                    potw = 0
+                    for i in range(3):
+                        potw += self._move_counts[i][dist][otw+1] / sum(self._move_counts[i][dist]) * self._cdxs[i]
+                    pcollide = 0 if rdist != 0 else 1 / len(movement_set)
+                    potk = 0 if prdist > 1 else self._attack_counts[threat_key][dist][1] / sum(self._attack_counts[threat_key][dist])
+                    ivalue += potw * (pcollide * (stk * (1 - potk) + \
+                        (stk and otw == 0) * potk - 1.3 * potk * (not stk or stw != 0)) + \
+                        0.15 * potk)
+                saction_rewards[stw+1][stk] = ivalue
+        if USE_GREEDY:
+            stw, stk = max(random.sample(list(itertools.product(range(3),range(2))),6),key=(lambda x:saction_rewards[x[0]][x[1]]))
+        else:
+            weights = []
+            options = []
+            for stw in range(3):
+                for stk in range(2):
+                    weights.append(10**saction_rewards[stw][stk])
+                    options.append((stw, stk))
+            stw, stk = random.choices(options, weights)[0]
+        movement = random.choice(list(movement_sets[stw]))
+        do_attack = bool(stk)
+        return movement, do_attack
+
 def make_all_bots() -> typing.List[base_bot]:
     return [
         random_bot(),
         angry_bot(),
         afk_bot(),
+        cautious_bot(),
+        syalis_bot(),
         ]
 
 def run_match(abot: base_bot, bbot: base_bot) -> typing.Tuple[int, int]:
