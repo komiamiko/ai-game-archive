@@ -317,6 +317,84 @@ class melee_bot(base_bot):
         throw_discs = [delta] * num_discs_to_throw
         return tick_action(movement, throw_discs)
 
+class reid_bot(base_bot):
+    """
+    Monte Carlo based bot.
+    Uses next game state prediction to dodge discs.
+    Always throws 2 discs at once in a spread pattern.
+    """
+    def __init__(self, use_eo: bool):
+        self._use_eo = use_eo
+    def get_bot_name(self):
+        result = 'Reid'
+        if self._use_eo:
+            result += '+EggMod'
+        return result
+    def get_player_name(self):
+        return 'komiamiko'
+    def reset(self, no):
+        import random
+        self._random = random.Random()
+        self._eo_toggle = False
+    def get_action(self, shalf, ohalf):
+        random = self._random
+        best_movement, _ = self._mc_route(shalf, 7, 3, 1, 0.9)
+        throw_discs = []
+        if shalf.hero.charge >= 2 * DISC_COST:
+            mypos = shalf.hero.pos
+            target = ohalf.hero.pos.copy()
+            if self._use_eo:
+                self._eo_toggle = not self._eo_toggle
+            if self._eo_toggle:
+                # go for a bounce shot
+                if random.randrange(3) == 0:
+                    pass
+                elif (mypos.x < WIDTH / 2) ^ (random.randrange(3) == 0):
+                    target.x = -target.x
+                else:
+                    target.x = 2*WIDTH-target.x
+                if random.randrange(3) == 0:
+                    pass
+                elif (mypos.y < HEIGHT / 2) ^ (random.randrange(3) == 0):
+                    target.y = -target.y
+                else:
+                    target.y = 2*HEIGHT-target.y
+            delta = target - mypos
+            delta_mag = delta.magnitude()
+            project_at = max(INTERSECT_DISTANCE * 2, delta_mag)
+            spread = 0.35 / project_at
+            throw_discs.append(vector(delta.x + delta.y * spread, delta.y - delta.x * spread))
+            throw_discs.append(vector(delta.x - delta.y * spread, delta.y + delta.x * spread))
+        return tick_action(best_movement, throw_discs)
+    def _mc_route(self, shalf: half_state, expand_to: int, extend: int, rem_branches: int, future_decay: float) -> typing.Tuple[vector, float]:
+        """
+        Evaluate some possible futures, and return what we think will get the best result.
+        """
+        random = self._random
+        best_movement = vector(0, 0)
+        best_score = -1e50
+        movement_candidates = [vector(0, 0)]
+        for _ in range(expand_to - 1):
+            ang = random.uniform(-math.pi, math.pi)
+            movement_candidates.append(vector(math.cos(ang), math.sin(ang)) * MOVE_SPEED)
+        for imovement in movement_candidates:
+            ivalue = 0
+            ishalf = shalf.copy()
+            decay_fac = 1
+            for _ in range(extend):
+                hp_before = ishalf.hero.hp
+                ishalf.update(imovement)
+                hp_after = ishalf.hero.hp
+                ivalue += (hp_after - hp_before) * decay_fac
+                decay_fac *= future_decay
+            if rem_branches > 0:
+                _, cvalue = self._mc_route(ishalf, expand_to, extend, rem_branches - 1, future_decay)
+                ivalue += decay_fac * cvalue
+            if ivalue > best_score:
+                best_movement = imovement
+                best_score = ivalue
+        return best_movement, best_score
+
 # END --- define bots above!
 
 def run_match(p0: base_bot, p1: base_bot) -> typing.Tuple[int, int]:
@@ -333,6 +411,7 @@ def make_all_bots() -> typing.List[base_bot]:
         random_bot(True, False),
         random_bot(True, True),
         melee_bot(),
+        reid_bot(False),
         ]
 
 def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[int, str, str]]:
