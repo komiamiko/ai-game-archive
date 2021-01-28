@@ -64,6 +64,8 @@ class vector(object):
     def normalize(self):
         m = self.magnitude()
         return self / m if m else self
+    def copy(self):
+        return vector(self.x, self.y)
 
 MOVE_SPEED = 0.25
 DISC_SPEED = 0.5
@@ -123,6 +125,8 @@ class hero(object):
         self.charge = charge
     def clamp(self):
         self.pos = vector(min(WIDTH-1, max(1, self.pos.x)), min(HEIGHT-1, max(1, self.pos.y)))
+    def copy(self):
+        return hero(self.pos, self.hp, self.charge)
 
 class disc(object):
     """
@@ -150,6 +154,8 @@ class disc(object):
             self.pos.y = 2*HEIGHT-self.pos.y
             self.vel.y = -self.vel.y
             self.rem_bounces -= 1
+    def copy(self):
+        return disc(self.id, self.pos, self.vel, self.rem_bounces)
 
 def _id_generator():
     import random
@@ -191,6 +197,8 @@ class half_state(object):
         for disc in discs:
             if hero.pos.distance(disc.pos) < INTERSECT_DISTANCE:
                 hero.hp -= 1
+    def copy(self):
+        return half_state(self.hero.copy(), list(map(disc.copy, self.discs)))
 
 class match_state(object):
     """
@@ -335,6 +343,8 @@ def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[
     for ii in range(TOURNAMENT_OUTER_ITERATIONS):
         orandom.shuffle(all_pairs)
         for p0, p1 in all_pairs:
+            p0.reset(True)
+            p1.reset(True)
             c0 = c1 = 0
             for jj in range(TOURNAMENT_MATCHES):
                 if orandom.randrange(2) == 0:
