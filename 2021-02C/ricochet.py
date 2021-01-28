@@ -234,7 +234,7 @@ class match_state(object):
         actions = [None] * 2
         for i in range(2):
             try:
-                actions[i] = self.players[i].get_action(self.halfs[i], self.halfs[1-i])
+                actions[i] = self.players[i].get_action(self.halfs[i].copy(), self.halfs[1-i].copy())
             except Exception as exc:
                 traceback.print_exc()
                 fails[i] = True
