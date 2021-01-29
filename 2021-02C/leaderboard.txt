@@ -1,0 +1,7 @@
+#   48000 |                 Reid by komiamiko
+#   37374 |               Tj Bot by tj
+#   35883 |          example_bot by examples
+#   29788 |        basedball_bot by examples
+#   15765 |            melee_bot by examples
+#    7640 |           random_bot by examples
+#    6695 |     random_stuck_bot by examples
