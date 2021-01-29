@@ -128,7 +128,7 @@ class hero(object):
     def clamp(self):
         self.pos = vector(min(WIDTH-1, max(1, self.pos.x)), min(HEIGHT-1, max(1, self.pos.y)))
     def copy(self):
-        return hero(self.pos, self.hp, self.charge)
+        return hero(self.pos.copy(), self.hp, self.charge)
 
 class disc(object):
     """
@@ -157,7 +157,7 @@ class disc(object):
             self.vel.y = -self.vel.y
             self.rem_bounces -= 1
     def copy(self):
-        return disc(self.id, self.pos, self.vel, self.rem_bounces)
+        return disc(self.id, self.pos.copy(), self.vel.copy(), self.rem_bounces)
 
 def _id_generator():
     import random
