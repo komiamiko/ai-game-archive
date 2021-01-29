@@ -24,6 +24,7 @@ Players gain 1 point per damage dealt, plus 3 bonus points if they win the match
 
 import abc
 import collections
+import datetime
 import itertools
 import math
 import traceback
@@ -81,6 +82,7 @@ MATCH_WIN_BONUS = 3
 MATCH_MAX_TICKS = 1000
 TOURNAMENT_OUTER_ITERATIONS = 10 # subject to change
 TOURNAMENT_MATCHES = 100 # subject to change
+TOURNAMENT_PATIENCE = datetime.timedelta(seconds=10) # subject to change
 
 class tick_action(object):
     """
@@ -362,7 +364,7 @@ class reid_bot(base_bot):
             delta = target - mypos
             delta_mag = delta.magnitude()
             project_at = max(INTERSECT_DISTANCE * 2, delta_mag)
-            spread = 0.35 / project_at
+            spread = 0.35 * INTERSECT_DISTANCE / project_at
             throw_discs.append(vector(delta.x + delta.y * spread, delta.y - delta.x * spread))
             throw_discs.append(vector(delta.x - delta.y * spread, delta.y + delta.x * spread))
         return tick_action(best_movement, throw_discs)
@@ -395,6 +397,38 @@ class reid_bot(base_bot):
                 best_score = ivalue
         return best_movement, best_score
 
+class tj_bot(base_bot):
+    def __init__(self):
+        import random
+        self._random = random.Random()
+    def get_bot_name(self):
+        return 'Tj Bot'
+    def get_player_name(self):
+        return 'tj'
+    def reset(self, no):
+        self.throw_next = False
+        import tj
+        tj.reset(no)
+        self._use_movement = True
+        self._use_aiming = True
+        pass
+    def get_action(self, shalf, ohalf):
+        random = self._random
+        import tj
+        discs = []
+        for d in shalf.discs:
+            discs.append((d.pos.x, d.pos.y, d.vel.x, d.vel.y, d.rem_bounces))
+        for d in ohalf.discs:
+            discs.append((d.pos.x, d.pos.y, d.vel.x, d.vel.y, d.rem_bounces))
+        tjrtn = tj.get_action(discs, len(discs), ohalf.hero.pos.x, ohalf.hero.pos.y, ohalf.hero.charge, shalf.hero.pos.x, shalf.hero.pos.y, shalf.hero.charge)
+        movement = vector(tjrtn[0], tjrtn[1])
+        throw_dir = vector(tjrtn[2], tjrtn[3])
+        throw_discs = []
+        # print(shalf.hero.pos)
+        if shalf.hero.charge == 10:
+            throw_discs = [throw_dir]
+        return tick_action(movement, throw_discs)
+
 # END --- define bots above!
 
 def run_match(p0: base_bot, p1: base_bot) -> typing.Tuple[int, int]:
@@ -412,6 +446,7 @@ def make_all_bots() -> typing.List[base_bot]:
         random_bot(True, True),
         melee_bot(),
         reid_bot(False),
+        tj_bot(),
         ]
 
 def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[int, str, str]]:
@@ -424,6 +459,8 @@ def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[
         for p0, p1 in all_pairs:
             p0.reset(True)
             p1.reset(True)
+            time_start = datetime.datetime.now()
+            time_alerted = False
             c0 = c1 = 0
             for jj in range(TOURNAMENT_MATCHES):
                 if orandom.randrange(2) == 0:
@@ -432,8 +469,14 @@ def run_tournament(all_bots: typing.List[base_bot]) -> typing.List[typing.Tuple[
                 d0, d1 = run_match(p0, p1)
                 c0 += d0
                 c1 += d1
+                time_now = datetime.datetime.now()
+                if time_now - time_start > TOURNAMENT_PATIENCE and not time_alerted:
+                    time_alerted = True
+                    print(f'{p0} vs {p1} ... finished {jj+1} / {TOURNAMENT_MATCHES} matches in {time_now - time_start}')
+            time_end = datetime.datetime.now()
             if ii == 0:
-                print(f'{p0} vs {p1} - {c0}:{c1}')
+                time_suffix = '' if time_end - time_start < TOURNAMENT_PATIENCE else f' (took {time_end - time_start})'
+                print(f'{p0} vs {p1} - {c0}:{c1}{time_suffix}')
             score_counters[str(p0)] += c0
             score_counters[str(p1)] += c1
         print(f'big iteration {ii+1} / {TOURNAMENT_OUTER_ITERATIONS}')
