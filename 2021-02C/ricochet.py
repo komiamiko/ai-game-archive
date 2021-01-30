@@ -325,13 +325,16 @@ class reid_bot(base_bot):
     Uses next game state prediction to dodge discs.
     Always throws 2 discs at once in a spread pattern.
     """
-    def __init__(self, use_eo: bool):
+    def __init__(self, name: str, use_eo: bool = False, use_hunter: bool = True,
+        mc_expand: int = 8, mc_iters: int = 5, spread_multiplier: float = 0.75):
+        self._name = name
         self._use_eo = use_eo
+        self._use_hunter = use_hunter
+        self._mc_expand = mc_expand
+        self._mc_iters = mc_iters
+        self._spread_multiplier = spread_multiplier
     def get_bot_name(self):
-        result = 'Reid'
-        if self._use_eo:
-            result += '+EggMod'
-        return result
+        return self._name
     def get_player_name(self):
         return 'komiamiko'
     def reset(self, no):
@@ -340,7 +343,7 @@ class reid_bot(base_bot):
         self._eo_toggle = False
     def get_action(self, shalf, ohalf):
         random = self._random
-        best_movement, _ = self._mc_route(shalf, 7, 3, 1, 0.9)
+        best_movement, _ = self._mc_route(shalf, ohalf, self._mc_expand, self._mc_iters, 1, 0.8)
         throw_discs = []
         if shalf.hero.charge >= 2 * DISC_COST:
             mypos = shalf.hero.pos
@@ -364,11 +367,12 @@ class reid_bot(base_bot):
             delta = target - mypos
             delta_mag = delta.magnitude()
             project_at = max(INTERSECT_DISTANCE * 2, delta_mag)
-            spread = 0.35 * INTERSECT_DISTANCE / project_at
+            SPREAD_FACTOR = math.sqrt(1 - (MOVE_SPEED + DISC_SPEED) / (2 * INTERSECT_DISTANCE)) * self._spread_multiplier
+            spread = SPREAD_FACTOR * INTERSECT_DISTANCE / project_at
             throw_discs.append(vector(delta.x + delta.y * spread, delta.y - delta.x * spread))
             throw_discs.append(vector(delta.x - delta.y * spread, delta.y + delta.x * spread))
         return tick_action(best_movement, throw_discs)
-    def _mc_route(self, shalf: half_state, expand_to: int, extend: int, rem_branches: int, future_decay: float) -> typing.Tuple[vector, float]:
+    def _mc_route(self, shalf: half_state, ohalf: half_state, expand_to: int, extend: int, rem_branches: int, future_decay: float) -> typing.Tuple[vector, float]:
         """
         Evaluate some possible futures, and return what we think will get the best result.
         """
@@ -387,10 +391,15 @@ class reid_bot(base_bot):
                 hp_before = ishalf.hero.hp
                 ishalf.update(imovement)
                 hp_after = ishalf.hero.hp
-                ivalue += (hp_after - hp_before) * decay_fac
+                jvalue = (hp_after - hp_before)
+                if self._use_hunter:
+                    IDEAL_DISTANCE = INTERSECT_DISTANCE * 2.1 / MOVE_SPEED * DISC_SPEED
+                    jvalue -= 0.01 * abs(ishalf.hero.pos.distance(ohalf.hero.pos))
+                jvalue *= decay_fac
+                ivalue += jvalue
                 decay_fac *= future_decay
             if rem_branches > 0:
-                _, cvalue = self._mc_route(ishalf, expand_to, extend, rem_branches - 1, future_decay)
+                _, cvalue = self._mc_route(ishalf, ohalf, expand_to, extend, rem_branches - 1, future_decay)
                 ivalue += decay_fac * cvalue
             if ivalue > best_score:
                 best_movement = imovement
@@ -445,7 +454,8 @@ def make_all_bots() -> typing.List[base_bot]:
         random_bot(True, False),
         random_bot(True, True),
         melee_bot(),
-        reid_bot(False),
+        reid_bot('Reid', use_hunter=False, mc_expand=7, mc_iters=3, spread_multiplier=0.38),
+        reid_bot('Reid 2'),
         tj_bot(),
         ]
 
