@@ -1,7 +1,11 @@
-#   47837 |                 Reid by komiamiko
-#   38478 |               Tj Bot by tj
-#   37110 |          example_bot by examples
-#   30445 |        basedball_bot by examples
-#   15667 |            melee_bot by examples
-#    7792 |           random_bot by examples
-#    7003 |     random_stuck_bot by examples
+# 7611200 |            Sugarcane by komiamiko
+# 7584800 |          Caramelcane by komiamiko
+# 6918600 |               Reid 2 by komiamiko
+# 5563800 |                 Reid by komiamiko
+# 4250700 |             NoHetaro by komiamiko
+# 4227700 |               Tj Bot by tj
+# 3760200 |          example_bot by examples
+# 3067600 |        basedball_bot by examples
+# 2041800 |            melee_bot by examples
+#  988800 |           random_bot by examples
+#  890400 |     random_stuck_bot by examples
