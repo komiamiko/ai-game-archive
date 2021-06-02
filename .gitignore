@@ -123,3 +123,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# 2021-02C - Ricochet
+2021-02C/hetaro/ricochet.py
+2021-02C/hetaro/session*
+2021-02C/hetaro/tmp*
+2021-02C/tmp*
+2021-02C/visualize/replay
+2021-02C/visualize/render
