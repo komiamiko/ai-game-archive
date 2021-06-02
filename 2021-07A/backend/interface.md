@@ -69,8 +69,7 @@ These may be interesting for humans to look at and analyze.
 * Query both players
 * Home bases do ship, turret production
 * Ships, turrets do attack
-* Ships do turret drop
-* Ships do turret pick up
+* Ships do turret pick up, drop
 * Ships, turrets, attacks do movement
 * Attacks do damage
 * Dead units removed
@@ -169,7 +168,10 @@ Turret attacks will only hit opponent ships.
 
 One per line.
 
-In general, instructions that cannot be carried out will be ignored, though the game runner will attempt to execute all of your instructions, in order.
+In many cases, the game runner will attempt to carry out your instructions as closely as possible, in order.
+For example, for move ship, target velocity is limited first by maximum velocity, and the change is then limited by maximum acceleration.
+If the ship does not exist or you do not control it, it does nothing.
+In general, only improperly formatted commands or commands not matching any of the specified allowed commands will cause your bot to forfeit the match on the basis of bad output.
 
 ## End of tick actions
 
@@ -194,7 +196,7 @@ Also, change in velocity is limited by maximum acceleration.
 
 ## Ship attack
 
-`ship_attack <target_id>`
+`ship_attack <id> <target_id>`
 
 You are allowed to attack your own ships.
 This may be useful to prune low HP ships.
@@ -209,13 +211,13 @@ This may be useful to prune low HP ships.
 
 ## Rotate turret
 
-`turret_aim <target_facing>`
+`turret_aim <id> <target_facing>`
 
 Change in facing angle is limited by maximum turning speed.
 
 ## Turret attack
 
-`turret_attack`
+`turret_attack <id>`
 
 Turret shots always move at full speed.
 You cannot control this.

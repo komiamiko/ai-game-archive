@@ -31,12 +31,13 @@ SHIP_ATTACK_DAMAGE = 5
 SHIP_HP = 30
 TURRET_LIMIT_N = 5
 TURRET_LIMIT_T = math.pi / 25
+TURRET_INITIAL_FACING = math.pi / 2
 TURRET_ATTACK_V = 0.2
 TURRET_ATTACK_R = 0.35
 TURRET_ATTACK_RELOAD = 10
 TURRET_ATTACK_DAMAGE = 3
 TURRET_HP = 50
-HOME_VISION_RANGE = 2
+BASE_VISION_RANGE = 2
 SHIP_VISION_RANGE = 1
 TURRET_VISION_RANGE = 0.7
 MINE_RANGE = 0.5
@@ -53,7 +54,7 @@ class GameEntity(object):
     Represents a game entity.
     """
     def __init__(self, player: int, vid: int, vtype: int, x: float, y: float,
-        hp: int, reload: int = 0, vx: float = 0, vy: float = 0, f: float = 0,
+        hp: int, vision: float, reload: int = 0, vx: float = 0, vy: float = 0, f: float = 0,
         ax: float = 0, ay: float = 0, vf: float = 0, carrying: int = 0):
         self.player = player
         self.vid = vid
@@ -61,6 +62,7 @@ class GameEntity(object):
         self.x = x
         self.y = y
         self.hp = hp
+        self.vision = vision
         self.reload = reload
         self.vx = vx
         self.vy = vy
@@ -96,12 +98,269 @@ class MatchResult(object):
     reason can be:
     * OK a player's home base is destroyed
     * INITIALIZATION_FAIL a bot failed during initialization
+    * TIMEOUT a bot exceeded the hard time limit per tick
+    * DIED_EARLY a bot process died before the match was over
+    * INVALID_ACTION a bot issued an invalid instruction
     """
     def __init__(self, outcome: int, reason: str):
         self.outcome = outcome
         self.reason = reason
     def __str__(self):
         return self.outcome + '\n' + self.reason
+
+def parse_xargs(xargs: list[str], types: list[type]) -> typing.Optional[list[typing.Union[int, float]]]:
+    """
+    Parse the arguments according to the expected types.
+    If the number of arguments is wrong or the parsing fails, returns None.
+    Otherwise, returns the parsed values.
+    """
+    if len(xargs) != len(types):
+        return None
+    result = []
+    for xs, ty in zip(xargs, types):
+        try:
+            xv = ty(xs)
+            result.append(xv)
+        except ValueError:
+            return None
+    return result
+
+class HalfState(object):
+    """
+    Represents the side of the game state corresponding to one player.
+    2 such halves form the whole game state.
+    
+    This class exists more to reduce code duplication than anything else.
+    """
+    def __init__(self, player: int, bot_info: BotInfo, id_gen: typing.Generator[int, None, None]):
+        self.player = player
+        self.bot_info = bot_info
+        self.bot_sub = None
+        self.id_gen = id_gen
+        self.units = {}
+        self.ship_attacks = []
+        self.turret_attacks = []
+        self.currency = 0
+        self.tick_counter = 0
+        self.other_half = None
+    def link(self, other: 'HalfState'):
+        """
+        Link this half with the other half.
+        """
+        self.other_half = other
+    def add_unit(self, unit: GameEntity):
+        self.units[unit.vid] = unit
+    def startup(self) -> typing.Optional[str]:
+        """
+        Attempt to initialize and start up the bot program.
+        
+        Return None for success, or a fail reason for failure.
+        """
+        bot_info = self.bot_info
+        for command in bot_info.commands[:-1]:
+            sub = subprocess.Popen(command)
+            ret = sub.wait()
+            if ret:
+                return 'INITIALIZATION_FAIL'
+        command = bot_info.commands[-1]
+        self.bot_sub = subprocess.Popen(command,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True)
+        return None
+    def shutdown(self):
+        """
+        Terminate the bot and release any other resources.
+        """
+        bot_sub = self.bot_sub
+        if bot_sub is not None:
+            ret = bot_sub.poll()
+            if ret is None:
+                try:
+                    bot_sub.stdin.write(input='end_game\n')
+                    bot_sub.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                ret = bot_sub.poll()
+                if ret is None:
+                    bot_sub.kill()
+        self.other_half = None
+    def set_starting_state(self):
+        """
+        Set the half state to be the starting game state.
+        """
+        player = self.player
+        id_gen = self.id_gen
+        self.add_unit(GameEntity(player, next(id_gen), TYPE_BASE,
+            BASE_LOCATIONS[player][0], BASE_LOCATIONS[player][1], BASE_HP, BASE_VISION_RANGE))
+        for _ in range(SHIP_STARTING_N):
+            self.add_unit(GameEntity(player, next(id_gen), TYPE_SHIP,
+                BASE_LOCATIONS[player][0], BASE_LOCATIONS[player][1], SHIP_HP, SHIP_VISION_RANGE))
+    def step_query(self) -> typing.Optional[str]:
+        """
+        Query the bot player, and retrieve the next set of actions.
+        
+        Return None for success, or a fail reason for failure.
+        """
+        # load locals
+        player = self.player
+        if player == 0:
+            fix_player = lambda i:i
+        else:
+            fix_player = lambda i:1-i
+        bot_sub = self.bot_sub
+        ohalf = self.other_half
+        sunits = self.units
+        ounits = ohalf.units
+        sship_attacks = self.ship_attacks
+        oship_attacks = ohalf.ship_attacks
+        sturret_attacks = self.turret_attacks
+        oturret_attacks = ohalf.turret_attacks
+        currency = self.currency
+        tick_counter = self.tick_counter
+        # determine visible elements
+        visible_bases = {}
+        visible_ships = {}
+        visible_turrets = {}
+        visible_ship_attacks = []
+        visible_turret_attacks = []
+        for unit in sunits:
+            if unit.vtype == TYPE_BASE:
+                visible_bases[unit.vid] = unit
+            elif unit.vtype == TYPE_SHIP:
+                visible_ships[unit.vid] = unit
+            elif unit.vtype == TYPE_TURRET:
+                visible_turrets[unit.vid] = unit
+        for ounit in ounits:
+            seen = False
+            for unit in sunits:
+                if unit.distance(ounit) <= unit.vision:
+                    seen = True
+                    break
+            if seen:
+                if unit.vtype == TYPE_BASE:
+                    visible_bases[unit.vid] = unit
+                elif unit.vtype == TYPE_SHIP:
+                    visible_ships[unit.vid] = unit
+                elif unit.vtype == TYPE_TURRET:
+                    visible_turrets[unit.vid] = unit
+        for attack in itertools.chain(sship_attacks, oship_attacks):
+            delay, target_id = attack
+            if target_id in visible_ships or target_id in visible_turrets or target_id in visible_bases:
+                visible_ship_attacks.append(attack)
+        for attack in sturret_attacks:
+            visible_turret_attacks.append(attack)
+        for attack in oturret_attacks:
+            seen = False
+            for unit in sunits:
+                if unit.distance(attack) <= unit.vision:
+                    seen = True
+                    break
+            if seen:
+                visible_turret_attacks.append(attack)
+        # construct input
+        unit_key = lambda unit:(fix_player(unit.player), unit.vid)
+        lines = []
+        lines.append(f'tick {tick_counter}')
+        lines.append(f'currency {currency}')
+        for mx, my in MINE_LOCATIONS:
+            lines.append(f'mine {mx} {my}')
+        for unit in visible_bases:
+            lines.append(f'home {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}')
+        for unit in visible_ships:
+            lines.append(f'ship {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}' + \
+                f' {unit.vx} {unit.vy} {unit.reload} {unit.carrying}')
+        for unit in visible_turrets:
+            lines.append(f'turret {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}' + \
+                f' {unit.f} {unit.reload}')
+        for delay, target_id in visible_ship_attacks:
+            lines.append(f'ship_attack {target_id} {delay}')
+        for unit in visible_turret_attacks:
+            lines.append(f'turret_attack {unit.player} {unit.x} {unit.y} {unit.vx} {unit.vy}')
+        lines.append('end_tick\n')
+        raw_in = '\n'.join(lines)
+        # send input, get output
+        bot_sub.stdin.write(raw_in)
+        actions_production = []
+        actions_move = []
+        actions_ship_attack = []
+        actions_pickup = []
+        actions_turret_turn = []
+        actions_turret_attack = []
+        while True:
+            ret = bot_sub.poll()
+            if ret is not None:
+                return 'BOT_DIED'
+            action_line = bot_sub.stdout.readline().strip()
+            if action_line == 'end_action':
+                break
+            if action_line == '':
+                continue
+            command, *xargs = action_line.split()
+            if command == 'make_ship':
+                parsed_args = parse_xargs(xargs, [])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_production.append(TYPE_SHIP)
+            elif command == 'make_turret':
+                parsed_args = parse_xargs(xargs, [])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_production.append(TYPE_TURRET)
+            elif command == 'move_ship':
+                parsed_args = parse_xargs(xargs, [int, float, float])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_move.append(parsed_args)
+            elif command == 'ship_attack':
+                parsed_args = parse_xargs(xargs, [int, int])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_ship_attack.append(parsed_args)
+            elif command == 'pickup':
+                parsed_args = parse_xargs(xargs, [int, int])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_pickup.append((True, parsed_args))
+            elif command == 'drop':
+                parsed_args = parse_xargs(xargs, [int])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_pickup.append((False, parsed_args))
+            elif command == 'turret_aim':
+                parsed_args = parse_xargs(xargs, [int, float])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_turret_turn.append(parsed_args)
+            elif command == 'turret_attack':
+                parsed_args = parse_xargs(xargs, [int])
+                if parsed_args is None:
+                    return 'INVALID_ACTION'
+                actions_turret_attack.append(parsed_args)
+            else:
+                return 'INVALID_ACTION'
+        # record actions
+        self.actions_production = actions_production
+        self.actions_move = actions_move
+        self.actions_ship_attack = actions_ship_attack
+        self.actions_pickup = actions_pickup
+        self.actions_turret_turn = actions_turret_turn
+        self.actions_turret_attack = actions_turret_attack
+    def step_production(self):
+        pass
+    def step_attack(self):
+        pass
+    def step_pickup(self):
+        pass
+    def step_movement(self):
+        pass
+    def step_damage(self):
+        pass
+    def step_remove_dead(self):
+        pass
+    def step_income(self):
+        pass
+    def step_timers(self):
+        pass
 
 def generate_ids() -> typing.Generator[int, None, None]:
     """
@@ -115,12 +374,6 @@ def generate_ids() -> typing.Generator[int, None, None]:
         h &= 2**63 - 1
         return h
 
-def add_unit(vdict: dict[int, GameEntity], unit: GameEntity):
-    """
-    Add a unit, keyed by its ID.
-    """
-    vdict[unit.vid] = unit
-
 def run_match(p1_name: str, p2_name: str,
     record_path: typing.Optional[pathlib.Path]) -> MatchResult:
     """
@@ -131,59 +384,24 @@ def run_match(p1_name: str, p2_name: str,
     p1_info = all_bots_map[p1_name]
     p2_info = all_bots_map[p2_name]
     # start up the bots
-    p1_ret = 0
-    for command in p1_info.commands[:-1]:
-        p1_sub = subprocess.Popen(command)
-        p1_ret = p1_sub.wait()
-        if p1_ret:
-            break
-    p1_sub = None
-    if not p1_ret:
-        command = p1_info.commands[-1]
-        p1_sub = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    p2_ret = 0
-    for command in p2_info.commands[:-1]:
-        p2_sub = subprocess.Popen(command)
-        p2_ret = p2_sub.wait()
-        if p2_ret:
-            break
-    p2_sub = None
-    if not p2_ret:
-        command = p2_info.commands[-1]
-        p2_sub = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    if p1_ret or p2_ret:
-        outcome = bool(p2_ret) - bool(p1_ret)
-        reason = 'INITIALIZATION_FAIL'
-        if p1_sub is not None:
-            try:
-                p1_sub.wait(10)
-            except subprocess.TimeoutExpired:
-                p1_sub.kill()
-        if p2_sub is not None:
-            try:
-                p2_sub.wait(10)
-            except subprocess.TimeoutExpired:
-                p2_sub.kill()
+    id_gen = generate_ids()
+    halfs = [
+        HalfState(0, p1_info, id_gen),
+        HalfState(1, p2_info, id_gen)
+        ]
+    for i in range(2):
+        halfs[i].link(halfs[1-i])
+    p1_init_err = halfs[0].startup()
+    p2_init_err = halfs[1].startup()
+    if p1_init_err or p2_init_err:
+        for half in halfs:
+            half.shutdown()
+        outcome = bool(p2_init_err) - bool(p1_init_err)
+        reason = p1_init_err or p2_init_err
         return MatchResult(outcome, reason)
     # run the match to completion
-    p1_units = {}
-    p2_units = {}
-    p1_turret_attacks = []
-    p2_turret_attacks = []
-    ship_attacks = []
-    p1_currency = 0
-    p2_currency = 0
-    id_gen = generate_ids()
-    add_unit(p1_units, GameEntity(0, next(id_gen), TYPE_BASE,
-        BASE_LOCATIONS[0][0], BASE_LOCATIONS[0][1], BASE_HP))
-    for _ in range(SHIP_STARTING_N):
-        add_unit(p1_units, GameEntity(0, next(id_gen), TYPE_SHIP,
-            BASE_LOCATIONS[0][0], BASE_LOCATIONS[0][1], SHIP_HP))
-    add_unit(p2_units, GameEntity(1, next(id_gen), TYPE_BASE,
-        BASE_LOCATIONS[1][0], BASE_LOCATIONS[1][1], BASE_HP))
-    for _ in range(SHIP_STARTING_N):
-        add_unit(p2_units, GameEntity(1, next(id_gen), TYPE_SHIP,
-            BASE_LOCATIONS[1][0], BASE_LOCATIONS[1][1], SHIP_HP))
+    for half in halfs:
+        half.set_starting_state()
 
 def main():
     """
