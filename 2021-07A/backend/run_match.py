@@ -36,7 +36,9 @@ TURRET_ATTACK_V = 0.2
 TURRET_ATTACK_R = 0.35
 TURRET_ATTACK_RELOAD = 10
 TURRET_ATTACK_DAMAGE = 3
+TURRET_ATTACK_PRUNE_MARGIN = 2.5
 TURRET_HP = 50
+PICKUP_RANGE = 0.1
 BASE_VISION_RANGE = 2
 SHIP_VISION_RANGE = 1
 TURRET_VISION_RANGE = 0.7
@@ -96,7 +98,7 @@ class MatchResult(object):
     * -1 for player 2 win
     
     reason can be:
-    * OK a player's home base is destroyed
+    * OK a player's home base is destroyed, or the tick limit is reached
     * INITIALIZATION_FAIL a bot failed during initialization
     * TIMEOUT a bot exceeded the hard time limit per tick
     * DIED_EARLY a bot process died before the match was over
@@ -138,6 +140,7 @@ class HalfState(object):
         self.bot_sub = None
         self.id_gen = id_gen
         self.units = {}
+        self.base = None
         self.ship_attacks = []
         self.turret_attacks = []
         self.currency = 0
@@ -150,6 +153,13 @@ class HalfState(object):
         self.other_half = other
     def add_unit(self, unit: GameEntity):
         self.units[unit.vid] = unit
+        if unit.vtype == TYPE_BASE:
+            self.base = unit.vid
+    def player_alive(self) -> bool:
+        """
+        Is the player still alive in the match?
+        """
+        return self.base in self.units
     def startup(self) -> typing.Optional[str]:
         """
         Attempt to initialize and start up the bot program.
@@ -223,16 +233,20 @@ class HalfState(object):
         visible_turrets = {}
         visible_ship_attacks = []
         visible_turret_attacks = []
-        for unit in sunits:
+        masked_turrets = set()
+        for unit in sunits.values():
             if unit.vtype == TYPE_BASE:
                 visible_bases[unit.vid] = unit
             elif unit.vtype == TYPE_SHIP:
                 visible_ships[unit.vid] = unit
             elif unit.vtype == TYPE_TURRET:
                 visible_turrets[unit.vid] = unit
-        for ounit in ounits:
+        for ounit in ounits.values():
+            if unit.vtype == TYPE_SHIP:
+                masked_turrets.add(unit.carrying)
+        for ounit in ounits.values():
             seen = False
-            for unit in sunits:
+            for unit in sunits.values():
                 if unit.distance(ounit) <= unit.vision:
                     seen = True
                     break
@@ -241,7 +255,7 @@ class HalfState(object):
                     visible_bases[unit.vid] = unit
                 elif unit.vtype == TYPE_SHIP:
                     visible_ships[unit.vid] = unit
-                elif unit.vtype == TYPE_TURRET:
+                elif unit.vtype == TYPE_TURRET and unit.vid not in masked_turrets:
                     visible_turrets[unit.vid] = unit
         for attack in itertools.chain(sship_attacks, oship_attacks):
             delay, target_id = attack
@@ -275,7 +289,7 @@ class HalfState(object):
         for delay, target_id in visible_ship_attacks:
             lines.append(f'ship_attack {target_id} {delay}')
         for unit in visible_turret_attacks:
-            lines.append(f'turret_attack {unit.player} {unit.x} {unit.y} {unit.vx} {unit.vy}')
+            lines.append(f'turret_attack {fix_player(unit.player)} {unit.x} {unit.y} {unit.vx} {unit.vy}')
         lines.append('end_tick\n')
         raw_in = '\n'.join(lines)
         # send input, get output
@@ -346,21 +360,223 @@ class HalfState(object):
         self.actions_turret_turn = actions_turret_turn
         self.actions_turret_attack = actions_turret_attack
     def step_production(self):
-        pass
+        """
+        Production step.
+        Attempt to produce new ships or turrets.
+        """
+        player = self.player
+        id_gen = self.id_gen
+        num_ships = 0
+        num_turrets = 0
+        for sunit in self.units.values():
+            if sunit.vtype == TYPE_SHIP:
+                num_ships += 1
+            elif sunit.vtype == TYPE_TURRET:
+                num_turrets += 1
+        for action in self.actions_production:
+            if action == TYPE_SHIP:
+                if self.currency >= SHIP_COST and num_ships < SHIP_LIMIT_N:
+                    self.currency -= SHIP_COST
+                    num_ships += 1
+                    self.add_unit(GameEntity(player, next(id_gen), TYPE_SHIP,
+                        BASE_LOCATIONS[player][0], BASE_LOCATIONS[player][1],
+                        SHIP_HP, SHIP_VISION_RANGE))
+            else:
+                if self.currency >= TURRET_COST and num_turrets < TURRET_LIMIT_N:
+                    self.currency -= TURRET_COST
+                    num_turrets += 1
+                    self.add_unit(GameEntity(player, next(id_gen), TYPE_TURRET,
+                        BASE_LOCATIONS[player][0], BASE_LOCATIONS[player][1],
+                        TURRET_HP, TURRET_VISION_RANGE, f=TURRET_INITIAL_FACING))
     def step_attack(self):
-        pass
+        """
+        Attack step.
+        Ships and turrets can emit attacks.
+        """
+        player = self.player
+        id_gen = self.id_gen
+        # spawn ship attacks
+        for sid, tid in self.actions_ship_attack:
+            if sid not in self.units:continue
+            if tid not in self.units and tid not in self.other_half.units:continue
+            sunit = self.units[sid]
+            if sunit.vtype != TYPE_SHIP:continue
+            if sunit.reload != 0:continue
+            if tid in self.units:
+                tunit = self.units[tid]
+            else:
+                tunit = self.other_half.units[tid]
+            if sunit.distance(tunit) > SHIP_ATTACK_RANGE:continue
+            self.ship_attacks.append((SHIP_ATTACK_DELAY, tid))
+            sunit.reload = SHIP_ATTACK_RELOAD
+        # spawn turret attacks
+        for sid in self.actions_turret_attack:
+            if sid not in self.units:continue
+            sunit = self.units[sid]
+            if sunit.vtype != TYPE_TURRET:continue
+            if sunit.reload != 0:continue
+            self.turret_attacks.append(GameEntity(player, next(id_gen), TYPE_TURRET_ATTACK,
+                sunit.x, sunit.y, 1, 0,
+                vx = TURRET_ATTACK_V * math.cos(sunit.f), vy = TURRET_ATTACK_V * math.sin(sunit.f)))
+            sunit.reload = TURRET_ATTACK_RELOAD
     def step_pickup(self):
-        pass
+        """
+        Pick up and drop step.
+        Ships can pick up or drop turrets.
+        Ships holding a turret at the end of this step have their speed limited.
+        Turrets being held at the end of this step have their position set to match the ship.
+        """
+        for is_pickup, spec in self.actions_pickup:
+            if is_pickup:
+                sid, tid = spec
+                if sid not in self.units or tid not in self.units:continue
+                sunit = self.units[sid]
+                tunit = self.units[tid]
+                if sunit.vtype != TYPE_SHIP or tunit.vtype != TYPE_TURRET:continue
+                if sunit.carrying != 0:continue
+                if sunit.distance(tunit) > PICKUP_RANGE:continue
+                sunit.carrying = tid
+            else:
+                sid = spec[0]
+                if sid not in self.units:continue
+                sunit = self.units[sid]
+                if sunit.vtype != TYPE_SHIP:continue
+                sunit.carrying = 0
+        for sunit in self.units.values():
+            if sunit.vtype != TYPE_SHIP or sunit.carrying == 0:continue
+            tid = sunit.carrying
+            tunit = self.units[tid]
+            tunit.x = sunit.x
+            tunit.y = sunit.y
+            speed = math.hypot(sunit.vx, sunit.vy)
+            if speed > SHIP_LIMIT_V_CARRY:
+                vmul = SHIP_LIMIT_V_CARRY / speed
+                sunit.vx *= vmul
+                sunit.vy *= vmul
     def step_movement(self):
-        pass
+        """
+        Movement step.
+        Ships do movement, turrets do aiming.
+        """
+        for sid, tvx, tvy in self.actions_move:
+            if sid not in self.units:continue
+            sunit = self.units[sid]
+            if sunit.vtype != TYPE_SHIP:continue
+            tspeed = math.hypot(tvx, tvy)
+            max_speed = SHIP_LIMIT_V if sunit.carrying == 0 else SHIP_LIMIT_V_CARRY
+            if tspeed > max_speed:
+                tmul = max_speed / tspeed
+                tvx *= tmul
+                tvy *= tmul
+            ax = tvx - sunit.vx
+            ay = tvy - sunit.vy
+            accel = math.hypot(ax, ay)
+            if accel > SHIP_LIMIT_A:
+                amul = SHIP_LIMIT_A / accel
+                ax *= amul
+                ay *= amul
+            sunit.ax = ax
+            sunit.ay = ay
+        for sid, tf in self.actions_turret_turn:
+            if sid not in self.units:continue
+            sunit = self.units[sid]
+            if sunit.vtype != TYPE_TURRET:continue
+            df = tf - sunit.f
+            if df > TURRET_LIMIT_T:
+                df = TURRET_LIMIT_T
+            elif df < -TURRET_LIMIT_T:
+                df = -TURRET_LIMIT_T
+            sunit.vf = df
+        for sunit in self.units:
+            sunit.movement()
+        for sattack in self.turret_attacks:
+            sattack.movement()
     def step_damage(self):
-        pass
+        """
+        Damage step.
+        Ship attacks hit and get absorbed.
+        Turret attacks deal damage once this tick.
+        """
+        sunits = self.units
+        ounits = self.other_half.units
+        ship_attacks = self.ship_attacks
+        masked_turrets = set()
+        for unit in itertools.chain(sunits.values(), ounits.values()):
+            if unit.vtype != TYPE_SHIP:continue
+            masked_turrets.add(unit.carrying)
+        for i in range(len(ship_attacks))[::-1]:
+            delay, tid = ship_attacks[i]
+            if delay != 0:continue
+            del ship_attacks[i]
+            if tid in masked_turrets:continue
+            if tid in sunits:
+                tunit = sunits[tid]
+            elif tid in ounits:
+                tunit = ounits[tid]
+            tunit.hp -= SHIP_ATTACK_DAMAGE
+        for attack in self.turret_attacks:
+            for unit in ounits.values():
+                if unit.distance(attack) <= TURRET_ATTACK_R:
+                    unit.hp -= TURRET_ATTACK_DAMAGE
     def step_remove_dead(self):
-        pass
+        """
+        Remove dead units step.
+        Also removes turret shots that are too far out of bounds to have any future effect.
+        For symmetry reasons, this actually removes the other half's dead units rather than its own.
+        """
+        ounits = self.other_half.units
+        turret_attacks = self.turret_attacks
+        for unit in list(ounits.values()):
+            if unit.hp <= 0:
+                del ounits[unit.vid]
+        min_x = min(BASE_LOCATIONS[0][0], BASE_LOCATIONS[1][0])
+        max_x = max(BASE_LOCATIONS[0][0], BASE_LOCATIONS[1][0])
+        min_y = min(BASE_LOCATIONS[0][1], BASE_LOCATIONS[1][1])
+        min_y = max(BASE_LOCATIONS[0][1], BASE_LOCATIONS[1][1])
+        for unit in ounits.values():
+            min_x = min(min_x, unit.x)
+            max_x = max(max_x, unit.x)
+            min_y = min(min_y, unit.y)
+            max_y = max(max_y, unit.y)
+        min_x -= TURRET_ATTACK_PRUNE_MARGIN
+        max_x += TURRET_ATTACK_PRUNE_MARGIN
+        min_y -= TURRET_ATTACK_PRUNE_MARGIN
+        max_y += TURRET_ATTACK_PRUNE_MARGIN
+        for i in range(len(turret_attacks))[::-1]:
+            attack = turret_attacks[i]
+            if attack.x < min_x or attack.x > max_x or attack.y < min_y or attack.y > max_y:
+                del turret_attacks[i]
     def step_income(self):
-        pass
+        """
+        Income step.
+        Base generates passive income.
+        Ships generate additional income if near a mine.
+        """
+        currency = self.currency
+        sunits = self.units
+        currency += PASSIVE_INCOME
+        for unit in sunits:
+            if unit.vtype != TYPE_SHIP:continue
+            can_mine = False
+            for mine in MINE_LOCATIONS:
+                if unit.distance(mine) <= MINE_RANGE:
+                    can_mine = True
+                    break
+            if can_mine:
+                currency += MINE_INCOME
+        self.currency = currency
     def step_timers(self):
-        pass
+        """
+        Timers step.
+        Updates all timers.
+        """
+        sunits = self.units
+        self.tick_counter += 1
+        for i in range(len(ship_attacks)):
+            delay, tid = ship_attacks[i]
+            ship_attacks[i] = (delay - 1, tid)
+        for unit in sunits:
+            unit.reload = max(0, unit.reload - 1)
 
 def generate_ids() -> typing.Generator[int, None, None]:
     """
@@ -402,6 +618,30 @@ def run_match(p1_name: str, p2_name: str,
     # run the match to completion
     for half in halfs:
         half.set_starting_state()
+    phases = [
+        HalfState.step_query,
+        HalfState.step_production,
+        HalfState.step_attack,
+        HalfState.step_pickup,
+        HalfState.step_movement,
+        HalfState.step_damage,
+        HalfState.step_remove_dead,
+        HalfState.step_income,
+        HalfState.step_timers,
+        ]
+    while halfs[0].tick_counter < TICK_LIMIT and (half.player_alive() for half in halfs):
+        for phase_func in phases:
+            p1_err = phase_func(halfs[0])
+            p2_err = phase_func(halfs[1])
+            if p1_err or p2_err:
+                for half in halfs:
+                    half.shutdown()
+                outcome = bool(p2_err) - bool(p1_err)
+                reason = p1_err or p2_err
+                return MatchResult(outcome, reason)
+    outcome = halfs[0].player_alive() - halfs[1].player_alive()
+    reason = 'OK'
+    return MatchResult(outcome, reason)
 
 def main():
     """
