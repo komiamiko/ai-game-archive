@@ -6,6 +6,7 @@ import argparse
 import itertools
 import math
 import pathlib
+import random
 import subprocess
 import typing
 from .bot_info import BotInfo, get_all_bots
@@ -68,19 +69,19 @@ class GameEntity(object):
         self.reload = reload
         self.vx = vx
         self.vy = vy
-        self.f = facing
+        self.f = f
         self.ax = ax
         self.ay = ay
         self.vf = vf
         self.carrying = carrying
     def movement(self):
-        self.vx += ax
-        self.vy += ay
+        self.vx += self.ax
+        self.vy += self.ay
         self.ax = 0
         self.ay = 0
-        self.x += vx
-        self.y += vy
-        self.f += vf
+        self.x += self.vx
+        self.y += self.vy
+        self.f += self.vf
         self.vf = 0
         self.f %= 2 * math.pi
     def distance(self, other):
@@ -91,12 +92,12 @@ class GameEntity(object):
 class MatchResult(object):
     """
     Represents the result of a match.
-    
+
     outcome can be:
     * 1 for player 1 win
     * 0 for draw
     * -1 for player 2 win
-    
+
     reason can be:
     * OK a player's home base is destroyed, or the tick limit is reached
     * INITIALIZATION_FAIL a bot failed during initialization
@@ -104,11 +105,12 @@ class MatchResult(object):
     * DIED_EARLY a bot process died before the match was over
     * INVALID_ACTION a bot issued an invalid instruction
     """
-    def __init__(self, outcome: int, reason: str):
+    def __init__(self, outcome: int, reason: str, ticks: int):
         self.outcome = outcome
         self.reason = reason
+        self.ticks = ticks
     def __str__(self):
-        return self.outcome + '\n' + self.reason
+        return str(self.outcome) + '\n' + self.reason + '\n' + str(self.ticks)
 
 def parse_xargs(xargs: list[str], types: list[type]) -> typing.Optional[list[typing.Union[int, float]]]:
     """
@@ -131,7 +133,7 @@ class HalfState(object):
     """
     Represents the side of the game state corresponding to one player.
     2 such halves form the whole game state.
-    
+
     This class exists more to reduce code duplication than anything else.
     """
     def __init__(self, player: int, bot_info: BotInfo, id_gen: typing.Generator[int, None, None]):
@@ -163,7 +165,7 @@ class HalfState(object):
     def startup(self) -> typing.Optional[str]:
         """
         Attempt to initialize and start up the bot program.
-        
+
         Return None for success, or a fail reason for failure.
         """
         bot_info = self.bot_info
@@ -175,7 +177,7 @@ class HalfState(object):
         command = bot_info.commands[-1]
         self.bot_sub = subprocess.Popen(command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True)
+            text=True, bufsize=1)
         return None
     def shutdown(self):
         """
@@ -186,7 +188,7 @@ class HalfState(object):
             ret = bot_sub.poll()
             if ret is None:
                 try:
-                    bot_sub.stdin.write(input='end_game\n')
+                    bot_sub.stdin.write('end_game\n')
                     bot_sub.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     pass
@@ -208,7 +210,7 @@ class HalfState(object):
     def step_query(self) -> typing.Optional[str]:
         """
         Query the bot player, and retrieve the next set of actions.
-        
+
         Return None for success, or a fail reason for failure.
         """
         # load locals
@@ -246,17 +248,17 @@ class HalfState(object):
                 masked_turrets.add(unit.carrying)
         for ounit in ounits.values():
             seen = False
-            for unit in sunits.values():
-                if unit.distance(ounit) <= unit.vision:
+            for sunit in sunits.values():
+                if sunit.distance(ounit) <= sunit.vision:
                     seen = True
                     break
             if seen:
-                if unit.vtype == TYPE_BASE:
-                    visible_bases[unit.vid] = unit
-                elif unit.vtype == TYPE_SHIP:
-                    visible_ships[unit.vid] = unit
-                elif unit.vtype == TYPE_TURRET and unit.vid not in masked_turrets:
-                    visible_turrets[unit.vid] = unit
+                if ounit.vtype == TYPE_BASE:
+                    visible_bases[ounit.vid] = ounit
+                elif ounit.vtype == TYPE_SHIP:
+                    visible_ships[ounit.vid] = ounit
+                elif ounit.vtype == TYPE_TURRET and ounit.vid not in masked_turrets:
+                    visible_turrets[ounit.vid] = ounit
         for attack in itertools.chain(sship_attacks, oship_attacks):
             delay, target_id = attack
             if target_id in visible_ships or target_id in visible_turrets or target_id in visible_bases:
@@ -278,17 +280,17 @@ class HalfState(object):
         lines.append(f'currency {currency}')
         for mx, my in MINE_LOCATIONS:
             lines.append(f'mine {mx} {my}')
-        for unit in visible_bases:
+        for unit in sorted(visible_bases.values(), key=unit_key):
             lines.append(f'home {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}')
-        for unit in visible_ships:
+        for unit in sorted(visible_ships.values(), key=unit_key):
             lines.append(f'ship {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}' + \
                 f' {unit.vx} {unit.vy} {unit.reload} {unit.carrying}')
-        for unit in visible_turrets:
+        for unit in sorted(visible_turrets.values(), key=unit_key):
             lines.append(f'turret {unit.vid} {fix_player(unit.player)} {unit.x} {unit.y} {unit.hp}' + \
                 f' {unit.f} {unit.reload}')
         for delay, target_id in visible_ship_attacks:
             lines.append(f'ship_attack {target_id} {delay}')
-        for unit in visible_turret_attacks:
+        for unit in sorted(visible_turret_attacks, key=unit_key):
             lines.append(f'turret_attack {fix_player(unit.player)} {unit.x} {unit.y} {unit.vx} {unit.vy}')
         lines.append('end_tick\n')
         raw_in = '\n'.join(lines)
@@ -487,7 +489,7 @@ class HalfState(object):
             elif df < -TURRET_LIMIT_T:
                 df = -TURRET_LIMIT_T
             sunit.vf = df
-        for sunit in self.units:
+        for sunit in self.units.values():
             sunit.movement()
         for sattack in self.turret_attacks:
             sattack.movement()
@@ -513,6 +515,8 @@ class HalfState(object):
                 tunit = sunits[tid]
             elif tid in ounits:
                 tunit = ounits[tid]
+            else:
+                continue
             tunit.hp -= SHIP_ATTACK_DAMAGE
         for attack in self.turret_attacks:
             for unit in ounits.values():
@@ -532,7 +536,7 @@ class HalfState(object):
         min_x = min(BASE_LOCATIONS[0][0], BASE_LOCATIONS[1][0])
         max_x = max(BASE_LOCATIONS[0][0], BASE_LOCATIONS[1][0])
         min_y = min(BASE_LOCATIONS[0][1], BASE_LOCATIONS[1][1])
-        min_y = max(BASE_LOCATIONS[0][1], BASE_LOCATIONS[1][1])
+        max_y = max(BASE_LOCATIONS[0][1], BASE_LOCATIONS[1][1])
         for unit in ounits.values():
             min_x = min(min_x, unit.x)
             max_x = max(max_x, unit.x)
@@ -555,7 +559,7 @@ class HalfState(object):
         currency = self.currency
         sunits = self.units
         currency += PASSIVE_INCOME
-        for unit in sunits:
+        for unit in sunits.values():
             if unit.vtype != TYPE_SHIP:continue
             can_mine = False
             for mine in MINE_LOCATIONS:
@@ -571,12 +575,24 @@ class HalfState(object):
         Updates all timers.
         """
         sunits = self.units
+        ship_attacks = self.ship_attacks
         self.tick_counter += 1
         for i in range(len(ship_attacks)):
             delay, tid = ship_attacks[i]
             ship_attacks[i] = (delay - 1, tid)
-        for unit in sunits:
+        for unit in sunits.values():
             unit.reload = max(0, unit.reload - 1)
+    def __str__(self):
+        """
+        Get a printable summary of the game state.
+        Suitable for debugging purposes.
+        """
+        lines = []
+        lines.append(f'Player {self.player}, tick {self.tick_counter}, resources {self.currency}')
+        for unit in self.units.values():
+            stype = ('Base', 'Ship', 'Turret')[unit.vtype]
+            lines.append(f'* {stype} HP={unit.hp} X={unit.x} Y={unit.y}')
+        return '\n'.join(lines)
 
 def generate_ids() -> typing.Generator[int, None, None]:
     """
@@ -588,7 +604,7 @@ def generate_ids() -> typing.Generator[int, None, None]:
         h = hash((i,r,1))
         h ^= hash((i,r,2)) << 32
         h &= 2**63 - 1
-        return h
+        yield h
 
 def run_match(p1_name: str, p2_name: str,
     record_path: typing.Optional[pathlib.Path]) -> MatchResult:
@@ -614,7 +630,7 @@ def run_match(p1_name: str, p2_name: str,
             half.shutdown()
         outcome = bool(p2_init_err) - bool(p1_init_err)
         reason = p1_init_err or p2_init_err
-        return MatchResult(outcome, reason)
+        return MatchResult(outcome, reason, 0)
     # run the match to completion
     for half in halfs:
         half.set_starting_state()
@@ -629,7 +645,7 @@ def run_match(p1_name: str, p2_name: str,
         HalfState.step_income,
         HalfState.step_timers,
         ]
-    while halfs[0].tick_counter < TICK_LIMIT and (half.player_alive() for half in halfs):
+    while halfs[0].tick_counter < TICK_LIMIT and all(half.player_alive() for half in halfs):
         for phase_func in phases:
             p1_err = phase_func(halfs[0])
             p2_err = phase_func(halfs[1])
@@ -638,10 +654,12 @@ def run_match(p1_name: str, p2_name: str,
                     half.shutdown()
                 outcome = bool(p2_err) - bool(p1_err)
                 reason = p1_err or p2_err
-                return MatchResult(outcome, reason)
+                return MatchResult(outcome, reason, halfs[0].tick_counter)
     outcome = halfs[0].player_alive() - halfs[1].player_alive()
     reason = 'OK'
-    return MatchResult(outcome, reason)
+    for half in halfs:
+        half.shutdown()
+    return MatchResult(outcome, reason, halfs[0].tick_counter)
 
 def main():
     """

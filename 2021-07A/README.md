@@ -20,6 +20,10 @@ Ships have a larger vision range than turrets.
 Strategy involves controlling mining locations, managing imperfect information, deception, ship management, and strategic use of turrets.
 A match ends in a draw automatically after a very high time limit.
 
+Game is considered to be in beta during 2021-06.
+Then, the game details will be frozen.
+The official tournament takes place in 2021-07, and at the end of the month, winners are determined.
+
 # Requirements
 
 Ideally, you should have
