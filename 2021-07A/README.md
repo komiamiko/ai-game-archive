@@ -16,6 +16,7 @@ Ships are slowed while carrying turrets.
 Ships use a single target ranged weapon, which cannot be dodged except by picking up the turret the attack is aiming at.
 Turrets use an infinite range piercing weapon, and can shoot in any direction, though they have limited turning speed.
 Turrets can only hit ships, while ships can hit anything.
+Ships have a larger vision range than turrets.
 Strategy involves controlling mining locations, managing imperfect information, deception, ship management, and strategic use of turrets.
 A match ends in a draw automatically after a very high time limit.
 

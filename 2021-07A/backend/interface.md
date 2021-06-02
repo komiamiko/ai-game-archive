@@ -10,6 +10,12 @@ Your bot should output all actions to standard output.
 
 At the end of the match, your bot should terminate gracefully.
 
+In all tournament phases other than the opening phase, multiple matches may be running at the same time, including multiple matches using the same bot.
+Please make sure your bot is safe to run in parallel with other instances of itself.
+
+Using information from other matches within the tournament is considered cheating, and not allowed.
+Using information from past matches done offline, for training for example, is okay.
+
 Failing to meet these requirements will result in your bot being disqualified.
 
 As courtesy, please also make your bot reasonably fast.
@@ -27,17 +33,49 @@ You could use a build tool like CMake within your preparation commands, and then
 There are plenty of other good languages out there, like Rust as an alternative for high-ish level high performance code.
 Any other language which can be run directly in this manner is also fair game.
 
+## Tournament phases
+
+The tournament consists of 3 phases.
+It reverts to a simpler mode if there are not enough bots to warrant the more complex behaviour.
+
+### Opening phase
+
+The main purpose of this phase is to initialize all bots.
+
+There are not many matches.
+
+Each bot is guaranteed to be included in one match.
+
+Matches are not run in parallel, to ensure initialization of all bots is done correctly.
+
+### Main phase
+
+In the main phase, the match scheduler will continuously match bots of similar ratings, run matches, and update the ratings.
+This will occur for many rounds, according to tournament parameters.
+This should establish ratings for all bots.
+
+The main phase is the longest phase, and has the highest parallelism factor.
+
+### Finals phase
+
+The finals phase is meant to determine the winners and the ratings of the top bots.
+It is conceptually similar to the main phase, except the match scheduler heavily favours picking bots within the top few, round are smaller, and the parallelism factor is not as high.
+
+Some sample games will also be saved.
+These may be interesting for humans to look at and analyze.
+
 # General structure of a tick
 
 * Query both players
 * Home bases do ship, turret production
-* Turrets do attack
+* Ships, turrets do attack
 * Ships do turret drop
 * Ships do turret pick up
 * Ships, turrets, attacks do movement
 * Attacks do damage
 * Dead units removed
-* Ships do mining
+* Generate income
+* Increment timers
 
 # Input specification
 
@@ -50,6 +88,8 @@ Angles are in radians.
 
 Unit IDs are globally unique and never reused within a match.
 ID 0 indicates no unit or information not available.
+IDs are pseudorandomly generated, and always fit in an unsigned 63-bit integer, which means they also fit in a signed 64-bit integer.
+Please do not use IDs to gain information on opponent production.
 
 ## End of match
 
@@ -176,6 +216,9 @@ Change in facing angle is limited by maximum turning speed.
 ## Turret attack
 
 `turret_attack`
+
+Turret shots always move at full speed.
+You cannot control this.
 
 # Further details
 

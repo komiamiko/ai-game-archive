@@ -31,12 +31,26 @@ class BotInfo(object):
         self.commands = commands
         self.family = family
         self.rating = rating
+    def __str__(self):
+        return self.name
+    def __eq__(self, other: 'BotInfo'):
+        return self.name == other.name
+    def __ne__(self, other: 'BotInfo'):
+        return not (self == other)
+    def __hash__(self):
+        return hash((BotInfo, self.name))
+
+_all_bots = None
 
 def get_all_bots() -> list[BotInfo]:
     """
     Get all bots in the tournament.
     Contestants, please add your bots here.
     """
+    global _all_bots
+    if _all_bots is not None:
+        return _all_bots
     all_bots = []
     
+    _all_bots = all_bots
     return all_bots
