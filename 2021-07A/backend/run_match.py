@@ -14,7 +14,7 @@ from .bot_info import BotInfo, get_all_bots
 # --- game related constants ---
 
 BASE_LOCATIONS = [(-10,0),(10,0)]
-MINE_LOCATIONS = [(0,-4),(0,1),(-2,6),(2,6),(-6,10),(6,10)]
+MINE_LOCATIONS = [(-3,1),(3,1),(0,4),(0,-2),(0,-6)]
 TYPE_BASE = 0
 TYPE_SHIP = 1
 TYPE_TURRET = 2

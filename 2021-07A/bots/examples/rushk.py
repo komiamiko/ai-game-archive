@@ -10,7 +10,7 @@ import math
 import random
 import sys
 
-MINE_LOCATIONS = [(0,-4),(0,1),(-2,6),(2,6),(-6,10),(6,10)]
+MINE_LOCATIONS = [(-3,1),(3,1),(0,4),(0,-2),(0,-6)]
 SHIP_ATTACK_RANGE = 1
 
 attack_k = int(sys.argv[1])
