@@ -168,14 +168,15 @@ class HalfState(object):
 
         Return None for success, or a fail reason for failure.
         """
+        cwd = pathlib.Path() / '2021-07A'
         bot_info = self.bot_info
         for command in bot_info.commands[:-1]:
-            sub = subprocess.Popen(command)
+            sub = subprocess.Popen(command, cwd=cwd)
             ret = sub.wait()
             if ret:
                 return 'INITIALIZATION_FAIL'
         command = bot_info.commands[-1]
-        self.bot_sub = subprocess.Popen(command,
+        self.bot_sub = subprocess.Popen(command, cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1)
         return None
